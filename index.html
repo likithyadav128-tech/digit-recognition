@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Digit — AI Handwritten Digit Recognition</title>
+    <meta name="description" content="Draw or upload handwritten digits and watch AI recognize them instantly. Powered by TensorFlow.js.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+</head>
+<body>
+    <!-- Animated gradient background -->
+    <div class="bg-gradient"></div>
+    <div class="bg-grid"></div>
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <!-- Loading overlay (while model trains) -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loader-content">
+            <div class="neural-loader">
+                <div class="loader-ring"></div>
+                <div class="loader-ring"></div>
+                <div class="loader-ring"></div>
+                <div class="loader-core"></div>
+            </div>
+            <h2 class="loader-title">Initializing Neural Engine</h2>
+            <p class="loader-status" id="loaderStatus">Loading MNIST dataset...</p>
+            <div class="loader-bar-track">
+                <div class="loader-bar-fill" id="loaderBarFill"></div>
+            </div>
+            <p class="loader-hint">Training a CNN on 65,000 digit samples</p>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div class="app" id="mainApp">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-glyph">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <path d="M16 2L28 9V23L16 30L4 23V9L16 2Z" stroke="url(#g1)" stroke-width="1.5" fill="none"/>
+                        <path d="M16 8L22 11.5V18.5L16 22L10 18.5V11.5L16 8Z" stroke="url(#g1)" stroke-width="1.5" fill="rgba(139,92,246,0.15)"/>
+                        <circle cx="16" cy="15" r="3" fill="url(#g1)"/>
+                        <defs><linearGradient id="g1" x1="4" y1="2" x2="28" y2="30"><stop stop-color="#818cf8"/><stop offset="1" stop-color="#c084fc"/></linearGradient></defs>
+                    </svg>
+                </div>
+                <span class="logo-text">NeuralDigit</span>
+            </div>
+            <div class="header-pill" id="headerPill">
+                <span class="pill-dot" id="pillDot"></span>
+                <span class="pill-text" id="pillText">Initializing...</span>
+            </div>
+        </header>
+
+        <!-- Hero section -->
+        <section class="hero">
+            <h1 class="hero-title">
+                <span class="hero-line">Handwritten Digit</span>
+                <span class="hero-line hero-gradient">Recognition</span>
+            </h1>
+            <p class="hero-desc">Draw a digit or upload an image — AI identifies it instantly</p>
+        </section>
+
+        <!-- Main workspace -->
+        <section class="workspace">
+            <!-- Input side -->
+            <div class="input-area">
+                <!-- Tab switcher -->
+                <div class="tab-bar">
+                    <button class="tab active" id="tabDraw" onclick="switchTab('draw')">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+                        Draw
+                    </button>
+                    <button class="tab" id="tabUpload" onclick="switchTab('upload')">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload
+                    </button>
+                </div>
+
+                <!-- Draw panel -->
+                <div class="input-panel" id="panelDraw">
+                    <div class="canvas-frame">
+                        <div class="canvas-glow"></div>
+                        <canvas id="drawCanvas" width="280" height="280"></canvas>
+                        <div class="canvas-hint" id="canvasHint">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+                            <span>Draw any digit 0–9</span>
+                        </div>
+                    </div>
+                    <div class="canvas-actions">
+                        <button class="action-btn" id="clearBtn" onclick="clearCanvas()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            Clear
+                        </button>
+                        <div class="brush-control">
+                            <span class="brush-label">Brush</span>
+                            <input type="range" id="brushSlider" min="10" max="30" value="18" class="range-input">
+                        </div>
+                        <button class="predict-btn" id="predictBtn" onclick="predictDigit()" disabled>
+                            Recognize
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Upload panel -->
+                <div class="input-panel hidden" id="panelUpload">
+                    <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                        <input type="file" id="fileInput" accept=".png,.jpg,.jpeg" onchange="handleFileUpload(event)" hidden>
+                        <div class="upload-icon-wrap">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="3"/>
+                                <circle cx="8.5" cy="8.5" r="1.5"/>
+                                <path d="M21 15l-5-5L5 21"/>
+                            </svg>
+                        </div>
+                        <p class="upload-title">Drop image here or click to browse</p>
+                        <p class="upload-hint">PNG, JPG, or JPEG only</p>
+                    </div>
+                    <!-- Upload preview -->
+                    <div class="upload-preview hidden" id="uploadPreview">
+                        <img id="uploadedImage" alt="Uploaded digit">
+                        <div class="upload-preview-actions">
+                            <button class="action-btn" onclick="clearUpload()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                Remove
+                            </button>
+                            <button class="predict-btn" id="predictUploadBtn" onclick="predictUploadedImage()" disabled>
+                                Recognize
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Divider -->
+            <div class="divider">
+                <div class="divider-line"></div>
+                <div class="divider-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+                <div class="divider-line"></div>
+            </div>
+
+            <!-- Result side -->
+            <div class="result-area">
+                <div class="result-card" id="resultCard">
+                    <!-- Empty state -->
+                    <div class="result-empty" id="resultEmpty">
+                        <div class="empty-icon">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.3">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                        </div>
+                        <p class="empty-text">Draw or upload a digit to see the prediction</p>
+                    </div>
+
+                    <!-- Prediction result -->
+                    <div class="result-prediction hidden" id="resultPrediction">
+                        <!-- Confidence ring -->
+                        <div class="ring-container">
+                            <svg class="confidence-ring" viewBox="0 0 120 120">
+                                <circle class="ring-bg" cx="60" cy="60" r="52" fill="none" stroke-width="6"/>
+                                <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="52" fill="none" stroke-width="6"
+                                    stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
+                            </svg>
+                            <div class="ring-digit" id="ringDigit">0</div>
+                        </div>
+                        <div class="result-meta">
+                            <div class="meta-row">
+                                <span class="meta-label">Confidence</span>
+                                <span class="meta-value" id="confValue">—</span>
+                            </div>
+                        </div>
+
+                        <!-- Probability bars -->
+                        <div class="prob-chart">
+                            <div class="prob-grid" id="probGrid"></div>
+                        </div>
+
+                        <!-- Model preview -->
+                        <div class="model-preview">
+                            <span class="preview-label">Model input (28×28)</span>
+                            <canvas id="previewCanvas" width="28" height="28"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- History -->
+                <div class="history" id="historyBar">
+                    <span class="history-label">History</span>
+                    <div class="history-items" id="historyItems"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Powered by TensorFlow.js · CNN trained on MNIST · 100% in-browser</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
