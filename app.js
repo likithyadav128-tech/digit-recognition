@@ -409,51 +409,126 @@ async function predictUploadedImage() {
     }
 }
 
-// ========== CENTER-OF-MASS PREPROCESSING (shared) ==========
-function centerByMassAndFit(grayArr, w, h) {
-    // Safe max finding (no call stack overflow)
-    let peakVal = 0;
-    for (let i = 0; i < grayArr.length; i++) {
-        if (grayArr[i] > peakVal) peakVal = grayArr[i];
-    }
-    const thresh = peakVal * 0.15;
-
-    let minX = w, minY = h, maxX = 0, maxY = 0;
-    let hasContent = false;
+// ========== DOMINANT DIGIT & CONNECTED COMPONENT EXTRACTION ==========
+function extractDominantDigit(binaryArr, w, h) {
+    // 1. Zero out border margins (outer 4% of width/height) to remove card edge/table borders
+    const marginX = Math.max(3, Math.floor(w * 0.04));
+    const marginY = Math.max(3, Math.floor(h * 0.04));
     for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-            if (grayArr[y * w + x] > thresh) {
-                hasContent = true;
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
+            if (x < marginX || x >= w - marginX || y < marginY || y >= h - marginY) {
+                binaryArr[y * w + x] = 0;
             }
         }
     }
 
-    const tmp = document.createElement('canvas');
-    tmp.width = 28; tmp.height = 28;
-    const tctx = tmp.getContext('2d');
-    tctx.fillStyle = '#000';
-    tctx.fillRect(0, 0, 28, 28);
+    // 2. Connected Component Labeling via BFS
+    const labels = new Int32Array(w * h);
+    let currentLabel = 0;
+    const components = [];
 
-    if (!hasContent || maxX <= minX || maxY <= minY) {
-        previewCtx.drawImage(tmp, 0, 0);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const idx = y * w + x;
+            if (binaryArr[idx] > 20 && labels[idx] === 0) {
+                currentLabel++;
+                let mass = 0;
+                let minX = x, maxX = x, minY = y, maxY = y;
+                const queue = [idx];
+                labels[idx] = currentLabel;
+
+                while (queue.length > 0) {
+                    const curr = queue.pop();
+                    const cy = Math.floor(curr / w);
+                    const cx = curr % w;
+                    mass += binaryArr[curr];
+
+                    if (cx < minX) minX = cx;
+                    if (cx > maxX) maxX = cx;
+                    if (cy < minY) minY = cy;
+                    if (cy > maxY) maxY = cy;
+
+                    const neighbors = [
+                        cy > 0 ? (cy - 1) * w + cx : -1,
+                        cy < h - 1 ? (cy + 1) * w + cx : -1,
+                        cx > 0 ? cy * w + (cx - 1) : -1,
+                        cx < w - 1 ? cy * w + (cx + 1) : -1
+                    ];
+
+                    for (const n of neighbors) {
+                        if (n >= 0 && binaryArr[n] > 20 && labels[n] === 0) {
+                            labels[n] = currentLabel;
+                            queue.push(n);
+                        }
+                    }
+                }
+
+                components.push({ label: currentLabel, mass, minX, maxX, minY, maxY });
+            }
+        }
+    }
+
+    if (components.length === 0) return null;
+
+    // Find the largest component (the main digit)
+    components.sort((a, b) => b.mass - a.mass);
+    const mainComp = components[0];
+
+    // Keep all components that are part of the digit (multi-stroke digits like 4, 5, 7)
+    const cleanArr = new Float32Array(w * h);
+    let finalMinX = mainComp.minX, finalMaxX = mainComp.maxX;
+    let finalMinY = mainComp.minY, finalMaxY = mainComp.maxY;
+
+    // Allow nearby strokes within 25% of image dimension
+    const maxDist = Math.max(25, Math.floor(Math.min(w, h) * 0.25));
+
+    for (const comp of components) {
+        const isSignificant = comp.mass >= mainComp.mass * 0.08;
+        const isNearby = (comp.minX <= mainComp.maxX + maxDist && comp.maxX >= mainComp.minX - maxDist &&
+                          comp.minY <= mainComp.maxY + maxDist && comp.maxY >= mainComp.minY - maxDist);
+
+        if (isSignificant && isNearby) {
+            if (comp.minX < finalMinX) finalMinX = comp.minX;
+            if (comp.maxX > finalMaxX) finalMaxX = comp.maxX;
+            if (comp.minY < finalMinY) finalMinY = comp.minY;
+            if (comp.maxY > finalMaxY) finalMaxY = comp.maxY;
+
+            for (let i = 0; i < w * h; i++) {
+                if (labels[i] === comp.label) {
+                    cleanArr[i] = binaryArr[i];
+                }
+            }
+        }
+    }
+
+    return {
+        arr: cleanArr,
+        minX: finalMinX, maxX: finalMaxX,
+        minY: finalMinY, maxY: finalMaxY
+    };
+}
+
+// ========== CENTER-OF-MASS PREPROCESSING (shared) ==========
+function centerByMassAndFit(grayArr, w, h) {
+    const digitData = extractDominantDigit(grayArr, w, h);
+    if (!digitData) {
+        previewCtx.fillStyle = '#000';
+        previewCtx.fillRect(0, 0, 28, 28);
         return tf.tensor4d(new Float32Array(784), [1, 28, 28, 1]);
     }
 
-    const cw = maxX - minX + 1;
-    const ch = maxY - minY + 1;
+    const { arr, minX, maxX, minY, maxY } = digitData;
+    const cw = Math.max(1, maxX - minX + 1);
+    const ch = Math.max(1, maxY - minY + 1);
 
-    // Crop
+    // Crop to digit bounding box
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = cw; cropCanvas.height = ch;
     const cropCtx = cropCanvas.getContext('2d');
     const cropData = cropCtx.createImageData(cw, ch);
     for (let y = 0; y < ch; y++) {
         for (let x = 0; x < cw; x++) {
-            const val = Math.round(grayArr[(y + minY) * w + (x + minX)]);
+            const val = Math.round(arr[(y + minY) * w + (x + minX)]);
             const idx = (y * cw + x) * 4;
             cropData.data[idx] = val;
             cropData.data[idx + 1] = val;
@@ -463,10 +538,10 @@ function centerByMassAndFit(grayArr, w, h) {
     }
     cropCtx.putImageData(cropData, 0, 0);
 
-    // Fit to 20x20 maintaining aspect ratio
+    // Scale to fit 20x20 box (standard MNIST dimension)
     const scale = Math.min(20.0 / cw, 20.0 / ch);
-    const newW = Math.max(1, Math.round(cw * scale));
-    const newH = Math.max(1, Math.round(ch * scale));
+    const newW = Math.max(2, Math.round(cw * scale));
+    const newH = Math.max(2, Math.round(ch * scale));
 
     const resizeCanvas = document.createElement('canvas');
     resizeCanvas.width = newW; resizeCanvas.height = newH;
@@ -481,7 +556,7 @@ function centerByMassAndFit(grayArr, w, h) {
         resizedGray[i] = resizedData.data[i * 4];
     }
 
-    // Center of mass
+    // Compute Center of Mass
     let totalMass = 0, comX = 0, comY = 0;
     for (let y = 0; y < newH; y++) {
         for (let x = 0; x < newW; x++) {
@@ -493,31 +568,62 @@ function centerByMassAndFit(grayArr, w, h) {
     }
 
     if (totalMass === 0) {
-        previewCtx.drawImage(tmp, 0, 0);
+        previewCtx.fillStyle = '#000';
+        previewCtx.fillRect(0, 0, 28, 28);
         return tf.tensor4d(new Float32Array(784), [1, 28, 28, 1]);
     }
 
     comX /= totalMass;
     comY /= totalMass;
 
+    // Shift center of mass to (14, 14)
     const shiftX = Math.round(14.0 - comX);
     const shiftY = Math.round(14.0 - comY);
 
-    const finalArr = new Float32Array(28 * 28);
+    const raw28 = new Float32Array(28 * 28);
     for (let y = 0; y < newH; y++) {
         for (let x = 0; x < newW; x++) {
             const ny = y + shiftY;
             const nx = x + shiftX;
             if (ny >= 0 && ny < 28 && nx >= 0 && nx < 28) {
-                finalArr[ny * 28 + nx] = resizedGray[y * newW + x];
+                raw28[ny * 28 + nx] = resizedGray[y * newW + x];
             }
         }
     }
 
+    // Stroke Thickening (matches MNIST brush thickness so thin pen lines are thick and clear)
+    const final28 = new Float32Array(28 * 28);
+    for (let y = 0; y < 28; y++) {
+        for (let x = 0; x < 28; x++) {
+            let maxV = raw28[y * 28 + x];
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const ny = y + dy, nx = x + dx;
+                    if (ny >= 0 && ny < 28 && nx >= 0 && nx < 28) {
+                        const factor = (dx === 0 && dy === 0) ? 1.0 : 0.65;
+                        const v = raw28[ny * 28 + nx] * factor;
+                        if (v > maxV) maxV = v;
+                    }
+                }
+            }
+            final28[y * 28 + x] = maxV;
+        }
+    }
+
     // Render 28x28 preview
+    const tmp = document.createElement('canvas');
+    tmp.width = 28; tmp.height = 28;
+    const tctx = tmp.getContext('2d');
     const previewData = tctx.createImageData(28, 28);
+
+    let maxVal = 0;
     for (let i = 0; i < 784; i++) {
-        const v = Math.round(finalArr[i]);
+        if (final28[i] > maxVal) maxVal = final28[i];
+    }
+
+    for (let i = 0; i < 784; i++) {
+        const norm = maxVal > 0 ? (final28[i] / maxVal) * 255.0 : 0;
+        const v = Math.round(norm);
         previewData.data[i * 4] = v;
         previewData.data[i * 4 + 1] = v;
         previewData.data[i * 4 + 2] = v;
@@ -526,15 +632,9 @@ function centerByMassAndFit(grayArr, w, h) {
     tctx.putImageData(previewData, 0, 0);
     previewCtx.drawImage(tmp, 0, 0);
 
-    // Normalize to 0-1
-    let finalMax = 0;
-    for (let i = 0; i < 784; i++) {
-        if (finalArr[i] > finalMax) finalMax = finalArr[i];
-    }
-
     const tensor = new Float32Array(784);
     for (let i = 0; i < 784; i++) {
-        tensor[i] = finalMax > 0 ? finalArr[i] / finalMax : 0;
+        tensor[i] = maxVal > 0 ? final28[i] / maxVal : 0;
     }
 
     return tf.tensor4d(tensor, [1, 28, 28, 1]);
