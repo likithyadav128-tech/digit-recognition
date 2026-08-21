@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDragDrop();
     initProbGrid();
     injectRingGradient();
-    autoTrain();
+    loadModel();
 });
 
 // ---- SVG gradient for ring (injected dynamically) ----
@@ -188,135 +188,44 @@ function switchTab(tab) {
     document.getElementById('panelUpload').classList.toggle('hidden', tab !== 'upload');
 }
 
-// ========== MNIST DATA ==========
-const MNIST_IMG_URL = 'https://storage.googleapis.com/learnjs-data/model-builder/mnist_images.png';
-const MNIST_LBL_URL = 'https://storage.googleapis.com/learnjs-data/model-builder/mnist_labels_uint8';
-const IMG_SIZE = 784;
-const NUM_CLASSES = 10;
-const TOTAL = 65000;
-const TRAIN_N = Math.floor(TOTAL * 5 / 6);
-const TEST_N = TOTAL - TRAIN_N;
-
-class MnistData {
-    async load(onStatus) {
-        onStatus('Downloading MNIST images...');
-        const imgP = new Promise(resolve => {
-            const img = new Image();
-            img.crossOrigin = '';
-            img.onload = () => {
-                const c = document.createElement('canvas');
-                const ctx = c.getContext('2d');
-                const buf = new ArrayBuffer(TOTAL * IMG_SIZE * 4);
-                const chunk = 5000;
-                c.width = img.width; c.height = chunk;
-                for (let i = 0; i < TOTAL / chunk; i++) {
-                    const view = new Float32Array(buf, i * IMG_SIZE * chunk * 4, IMG_SIZE * chunk);
-                    ctx.drawImage(img, 0, i * chunk, img.width, chunk, 0, 0, img.width, chunk);
-                    const d = ctx.getImageData(0, 0, c.width, chunk);
-                    for (let j = 0; j < d.data.length / 4; j++) view[j] = d.data[j * 4] / 255;
-                }
-                this.images = new Float32Array(buf);
-                resolve();
-            };
-            img.src = MNIST_IMG_URL;
-        });
-
-        onStatus('Downloading labels...');
-        const lblP = fetch(MNIST_LBL_URL).then(r => r.arrayBuffer()).then(b => { this.labels = new Uint8Array(b); });
-        await Promise.all([imgP, lblP]);
-
-        this.trainX = this.images.slice(0, IMG_SIZE * TRAIN_N);
-        this.testX = this.images.slice(IMG_SIZE * TRAIN_N);
-        this.trainY = this.labels.slice(0, NUM_CLASSES * TRAIN_N);
-        this.testY = this.labels.slice(NUM_CLASSES * TRAIN_N);
-    }
-
-    train() {
-        return {
-            xs: tf.tensor4d(this.trainX, [TRAIN_N, 28, 28, 1]),
-            ys: tf.tensor2d(this.trainY, [TRAIN_N, NUM_CLASSES])
-        };
-    }
-    test() {
-        return {
-            xs: tf.tensor4d(this.testX, [TEST_N, 28, 28, 1]),
-            ys: tf.tensor2d(this.testY, [TEST_N, NUM_CLASSES])
-        };
-    }
-}
-
-// ========== MODEL ==========
-function buildModel() {
-    const m = tf.sequential();
-    m.add(tf.layers.conv2d({ inputShape: [28, 28, 1], filters: 32, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
-    m.add(tf.layers.batchNormalization());
-    m.add(tf.layers.maxPooling2d({ poolSize: 2 }));
-    m.add(tf.layers.conv2d({ filters: 64, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
-    m.add(tf.layers.batchNormalization());
-    m.add(tf.layers.maxPooling2d({ poolSize: 2 }));
-    m.add(tf.layers.flatten());
-    m.add(tf.layers.dropout({ rate: 0.3 }));
-    m.add(tf.layers.dense({ units: 128, activation: 'relu', kernelInitializer: 'heNormal' }));
-    m.add(tf.layers.dropout({ rate: 0.3 }));
-    m.add(tf.layers.dense({ units: NUM_CLASSES, activation: 'softmax' }));
-    m.compile({ optimizer: tf.train.adam(0.001), loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
-    return m;
-}
-
-// ========== AUTO TRAIN ==========
-async function autoTrain() {
+// ========== LOAD PRE-TRAINED MODEL ==========
+async function loadModel() {
     const overlay = document.getElementById('loadingOverlay');
     const status = document.getElementById('loaderStatus');
     const bar = document.getElementById('loaderBarFill');
-    const epochs = 3;
 
     try {
-        const data = new MnistData();
-        await data.load(msg => { status.textContent = msg; });
-        bar.style.width = '12%';
+        status.textContent = 'Loading pre-trained CNN weights...';
+        bar.style.width = '40%';
 
-        status.textContent = 'Building CNN model...';
-        model = buildModel();
-        bar.style.width = '15%';
+        // Load pre-trained CNN model (99.21% test accuracy)
+        model = await tf.loadLayersModel('./tfjs_model/model.json');
+        bar.style.width = '80%';
 
-        status.textContent = 'Training neural network...';
-        const train = data.train();
-        const test = data.test();
-
-        await model.fit(train.xs, train.ys, {
-            epochs,
-            batchSize: 128,
-            validationData: [test.xs, test.ys],
-            shuffle: true,
-            callbacks: {
-                onEpochEnd: (ep, logs) => {
-                    const pct = 15 + ((ep + 1) / epochs) * 80;
-                    bar.style.width = pct + '%';
-                    status.textContent = `Epoch ${ep + 1}/${epochs} — Accuracy ${(logs.val_acc * 100).toFixed(1)}%`;
-                }
-            }
-        });
+        // Warm up the model with a dummy inference
+        status.textContent = 'Initializing inference engine...';
+        const dummy = tf.zeros([1, 28, 28, 1]);
+        const warmup = model.predict(dummy);
+        await warmup.data();
+        dummy.dispose();
+        warmup.dispose();
 
         bar.style.width = '100%';
-        status.textContent = 'Model ready!';
-        train.xs.dispose(); train.ys.dispose();
-        test.xs.dispose(); test.ys.dispose();
-
+        status.textContent = 'Neural engine ready!';
         isModelReady = true;
 
-        // Transition
-        await sleep(600);
+        // Smooth transition to main app
+        await sleep(300);
         overlay.classList.add('fade-out');
         document.getElementById('mainApp').classList.add('visible');
         document.getElementById('pillDot').classList.add('ready');
-        document.getElementById('pillText').textContent = 'Model ready';
+        document.getElementById('pillText').textContent = 'Model ready · 99.2% Acc';
         document.getElementById('predictBtn').disabled = false;
         if (!document.getElementById('uploadPreview').classList.contains('hidden')) {
             document.getElementById('predictUploadBtn').disabled = false;
         }
-
     } catch (err) {
-        console.error(err);
+        console.error('Error loading pre-trained model:', err);
         status.textContent = 'Error: ' + err.message;
     }
 }

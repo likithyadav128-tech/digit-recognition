@@ -1,5 +1,6 @@
 import streamlit as st
 import numpy as np
+import os
 from PIL import Image, ImageOps, ImageFilter
 from streamlit_drawable_canvas import st_canvas
 import tensorflow as tf
@@ -20,10 +21,8 @@ st.set_page_config(
 # ──────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Import fonts */
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-    /* Root variables */
     :root {
         --violet-400: #a78bfa;
         --violet-500: #8b5cf6;
@@ -33,7 +32,6 @@ st.markdown("""
         --green-400: #4ade80;
     }
 
-    /* Global background */
     .stApp {
         background: #06060e;
         background-image:
@@ -41,380 +39,436 @@ st.markdown("""
             radial-gradient(ellipse 60% 50% at 80% 80%, rgba(139,92,246,0.06) 0%, transparent 60%);
     }
 
-    /* Hide default elements */
     #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
     .block-container { padding-top: 2rem; max-width: 1100px; }
 
-    /* Typography */
-    h1, h2, h3, p, span, div, label {
-        font-family: 'Outfit', sans-serif !important;
-    }
+    h1, h2, h3, p, span, div, label { font-family: 'Outfit', sans-serif !important; }
 
-    /* Hero title */
     .hero-title {
-        text-align: center;
-        font-size: 2.6rem;
-        font-weight: 900;
-        letter-spacing: -0.03em;
-        line-height: 1.15;
-        margin-bottom: 4px;
-        color: #f0eef6;
+        text-align: center; font-size: 2.6rem; font-weight: 900;
+        letter-spacing: -0.03em; line-height: 1.15; margin-bottom: 4px; color: #f0eef6;
     }
     .hero-gradient {
         background: linear-gradient(135deg, #818cf8 0%, #a78bfa 40%, #c084fc 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .hero-desc {
-        text-align: center;
-        font-size: 1rem;
-        color: #8b86a8;
-        font-weight: 400;
-        margin-bottom: 2rem;
-    }
+    .hero-desc { text-align: center; font-size: 1rem; color: #8b86a8; font-weight: 400; margin-bottom: 2rem; }
 
-    /* Status badge */
     .status-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 16px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.06);
-        font-size: 0.78rem;
-        color: #8b86a8;
-        margin: 0 auto 1.5rem;
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 6px 16px; border-radius: 999px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+        font-size: 0.78rem; color: #8b86a8; margin: 0 auto 1.5rem;
     }
     .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #4ade80;
-        box-shadow: 0 0 8px rgba(74,222,128,0.5);
-        display: inline-block;
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #4ade80; box-shadow: 0 0 8px rgba(74,222,128,0.5); display: inline-block;
     }
 
-    /* Glass cards */
     .glass-card {
-        background: rgba(12, 12, 30, 0.7);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid rgba(139, 92, 246, 0.1);
-        border-radius: 20px;
-        padding: 28px;
-        box-shadow: 0 4px 24px rgba(0,0,0,0.3), 0 0 0 1px rgba(139,92,246,0.05);
+        background: rgba(12, 12, 30, 0.7); backdrop-filter: blur(24px);
+        border: 1px solid rgba(139, 92, 246, 0.1); border-radius: 20px;
+        padding: 28px; box-shadow: 0 4px 24px rgba(0,0,0,0.3), 0 0 0 1px rgba(139,92,246,0.05);
     }
 
-    /* Section labels */
     .section-label {
-        font-size: 0.72rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #5c577a;
-        margin-bottom: 14px;
+        font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.08em; color: #5c577a; margin-bottom: 14px;
     }
 
-    /* Prediction display */
-    .prediction-box {
-        text-align: center;
-        padding: 20px 0;
-    }
+    .prediction-box { text-align: center; padding: 20px 0; }
     .pred-digit {
-        font-size: 6rem;
-        font-weight: 900;
-        line-height: 1;
+        font-size: 6rem; font-weight: 900; line-height: 1;
         background: linear-gradient(135deg, #818cf8 0%, #a78bfa 40%, #c084fc 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 8px;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px;
     }
-    .pred-confidence {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: #4ade80;
-    }
-    .pred-label {
-        font-size: 0.7rem;
-        color: #5c577a;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-top: 2px;
-    }
+    .pred-confidence { font-family: 'JetBrains Mono', monospace; font-size: 1.3rem; font-weight: 700; color: #4ade80; }
+    .pred-label { font-size: 0.7rem; color: #5c577a; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
 
-    /* Probability bars */
     .prob-container { margin-top: 16px; }
-    .prob-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 5px;
-    }
+    .prob-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
     .prob-digit-label {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #5c577a;
-        width: 16px;
-        text-align: center;
-        flex-shrink: 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        font-weight: 600; color: #5c577a; width: 16px; text-align: center; flex-shrink: 0;
     }
-    .prob-track {
-        flex: 1;
-        height: 16px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 4px;
-        overflow: hidden;
-    }
+    .prob-track { flex: 1; height: 16px; background: rgba(255,255,255,0.03); border-radius: 4px; overflow: hidden; }
     .prob-fill {
-        height: 100%;
-        border-radius: 4px;
-        background: linear-gradient(90deg, #6366f1, #8b5cf6);
-        opacity: 0.4;
-        transition: width 0.5s ease;
+        height: 100%; border-radius: 4px;
+        background: linear-gradient(90deg, #6366f1, #8b5cf6); opacity: 0.4;
     }
     .prob-fill.top-pred {
         background: linear-gradient(135deg, #818cf8 0%, #a78bfa 40%, #c084fc 100%);
-        opacity: 1;
-        box-shadow: 0 0 10px rgba(139,92,246,0.25);
+        opacity: 1; box-shadow: 0 0 10px rgba(139,92,246,0.25);
     }
     .prob-pct {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.65rem;
-        font-weight: 500;
-        color: #5c577a;
-        width: 42px;
-        text-align: right;
-        flex-shrink: 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+        font-weight: 500; color: #5c577a; width: 42px; text-align: right; flex-shrink: 0;
     }
 
-    /* Canvas styling */
-    canvas {
-        border-radius: 14px !important;
-    }
-    .stCanvas > div {
-        border-radius: 14px;
-        overflow: hidden;
-        box-shadow: 0 0 30px rgba(139,92,246,0.08);
-    }
+    canvas { border-radius: 14px !important; }
 
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: rgba(255,255,255,0.02);
-        border-radius: 10px;
-        padding: 4px;
-        border: 1px solid rgba(255,255,255,0.04);
+        gap: 4px; background: rgba(255,255,255,0.02); border-radius: 10px;
+        padding: 4px; border: 1px solid rgba(255,255,255,0.04);
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        font-family: 'Outfit', sans-serif;
-        font-weight: 600;
-        font-size: 0.85rem;
-        color: #8b86a8;
-        padding: 8px 20px;
+        border-radius: 8px; font-family: 'Outfit', sans-serif;
+        font-weight: 600; font-size: 0.85rem; color: #8b86a8; padding: 8px 20px;
     }
     .stTabs [aria-selected="true"] {
-        background: rgba(20, 20, 50, 0.55);
-        color: #f0eef6;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        background: rgba(20, 20, 50, 0.55); color: #f0eef6; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
-    .stTabs [data-baseweb="tab-border"] { display: none; }
-    .stTabs [data-baseweb="tab-highlight"] { display: none; }
+    .stTabs [data-baseweb="tab-border"], .stTabs [data-baseweb="tab-highlight"] { display: none; }
 
-    /* Buttons */
     .stButton > button {
-        font-family: 'Outfit', sans-serif;
-        font-weight: 700;
-        border-radius: 10px;
-        padding: 10px 24px;
-        border: none;
-        transition: all 0.2s ease;
+        font-family: 'Outfit', sans-serif; font-weight: 700;
+        border-radius: 10px; padding: 10px 24px; border: none;
     }
     .stButton > button[kind="primary"],
     .stButton > button[data-testid="stBaseButton-primary"] {
         background: linear-gradient(135deg, #818cf8, #a78bfa, #c084fc);
-        color: #fff;
-        box-shadow: 0 4px 20px rgba(99,102,241,0.35);
-    }
-    .stButton > button[kind="primary"]:hover,
-    .stButton > button[data-testid="stBaseButton-primary"]:hover {
-        box-shadow: 0 6px 28px rgba(99,102,241,0.5);
-        transform: translateY(-1px);
+        color: #fff; box-shadow: 0 4px 20px rgba(99,102,241,0.35);
     }
     .stButton > button[kind="secondary"],
     .stButton > button[data-testid="stBaseButton-secondary"] {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.07);
-        color: #8b86a8;
-    }
-    .stButton > button[kind="secondary"]:hover,
-    .stButton > button[data-testid="stBaseButton-secondary"]:hover {
-        background: rgba(255,255,255,0.07);
-        color: #f0eef6;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); color: #8b86a8;
     }
 
-    /* File uploader */
     .stFileUploader {
         border: 2px dashed rgba(139,92,246,0.2) !important;
-        border-radius: 14px !important;
-        background: rgba(255,255,255,0.02) !important;
-    }
-    .stFileUploader:hover {
-        border-color: rgba(139,92,246,0.4) !important;
+        border-radius: 14px !important; background: rgba(255,255,255,0.02) !important;
     }
 
-    /* Slider */
-    .stSlider [data-baseweb="slider"] [role="slider"] {
-        background: linear-gradient(135deg, #818cf8, #c084fc);
-        box-shadow: 0 0 8px rgba(139,92,246,0.4);
-    }
-
-    /* History chips */
     .history-chip {
-        display: inline-flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        width: 42px;
-        height: 52px;
-        border-radius: 10px;
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.06);
-        margin-right: 6px;
-        margin-bottom: 6px;
+        display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+        width: 42px; height: 52px; border-radius: 10px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+        margin-right: 6px; margin-bottom: 6px;
     }
     .chip-digit {
-        font-size: 1.1rem;
-        font-weight: 800;
+        font-size: 1.1rem; font-weight: 800;
         background: linear-gradient(135deg, #818cf8, #c084fc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .chip-conf {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.5rem;
-        color: #5c577a;
-    }
+    .chip-conf { font-family: 'JetBrains Mono', monospace; font-size: 0.5rem; color: #5c577a; }
 
-    /* Footer */
-    .app-footer {
-        text-align: center;
-        font-size: 0.7rem;
-        color: #5c577a;
-        padding: 24px 0 8px;
-        letter-spacing: 0.01em;
-    }
+    .app-footer { text-align: center; font-size: 0.7rem; color: #5c577a; padding: 24px 0 8px; }
+    .empty-state { text-align: center; padding: 60px 20px; color: #5c577a; font-size: 0.9rem; }
 
-    /* Empty state */
-    .empty-state {
-        text-align: center;
-        padding: 60px 20px;
-        color: #5c577a;
-        font-size: 0.9rem;
+    .preview-box {
+        display: flex; align-items: center; gap: 10px; justify-content: center;
+        padding: 10px; margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.04);
     }
-
-    /* Metric override */
-    [data-testid="stMetricValue"] {
-        font-family: 'JetBrains Mono', monospace !important;
-        color: #4ade80 !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-family: 'Outfit', sans-serif !important;
-        color: #5c577a !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.06em !important;
-        font-size: 0.7rem !important;
-    }
+    .preview-label { font-size: 0.68rem; color: #5c577a; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────
-# Model: Build & Train (cached)
+# Model: Robust CNN with Data Augmentation
 # ──────────────────────────────────────────────
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_model")
+MODEL_PATH = os.path.join(MODEL_DIR, "digit_cnn_v2.keras")
+ACC_PATH = os.path.join(MODEL_DIR, "accuracy_v2.txt")
+
+
 @st.cache_resource(show_spinner=False)
 def load_trained_model():
-    """Build and train CNN on MNIST, cached across reruns."""
+    """Load model from disk if available, otherwise train with augmentation and save."""
+
+    # Try loading saved model first (instant, ~2 seconds)
+    if os.path.exists(MODEL_PATH) and os.path.exists(ACC_PATH):
+        model = keras.models.load_model(MODEL_PATH)
+        with open(ACC_PATH, "r") as f:
+            acc = float(f.read().strip())
+        return model, acc
+
+    # First run: train with data augmentation
     (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
-    # Preprocess
     x_train = x_train.reshape(-1, 28, 28, 1).astype("float32") / 255.0
     x_test = x_test.reshape(-1, 28, 28, 1).astype("float32") / 255.0
     y_train = keras.utils.to_categorical(y_train, 10)
     y_test = keras.utils.to_categorical(y_test, 10)
 
-    # Build CNN
-    model = keras.Sequential([
-        keras.layers.Conv2D(32, 3, activation="relu", kernel_initializer="he_normal", input_shape=(28, 28, 1)),
-        keras.layers.BatchNormalization(),
-        keras.layers.MaxPooling2D(2),
-        keras.layers.Conv2D(64, 3, activation="relu", kernel_initializer="he_normal"),
-        keras.layers.BatchNormalization(),
-        keras.layers.MaxPooling2D(2),
-        keras.layers.Flatten(),
-        keras.layers.Dropout(0.3),
-        keras.layers.Dense(128, activation="relu", kernel_initializer="he_normal"),
-        keras.layers.Dropout(0.3),
-        keras.layers.Dense(10, activation="softmax"),
+    # Data augmentation: makes the model robust to real-world image variations
+    data_augmentation = keras.Sequential([
+        keras.layers.RandomRotation(0.08),        # ±15° rotation
+        keras.layers.RandomTranslation(0.08, 0.08),  # ±8% shift
+        keras.layers.RandomZoom(0.08),            # ±8% zoom
     ])
 
-    model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
-    model.fit(x_train, y_train, epochs=3, batch_size=128, validation_data=(x_test, y_test), verbose=0)
+    # Stronger CNN architecture
+    inputs = keras.Input(shape=(28, 28, 1))
+    x = data_augmentation(inputs)
+
+    # Block 1
+    x = keras.layers.Conv2D(32, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.Conv2D(32, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.MaxPooling2D(2)(x)
+    x = keras.layers.Dropout(0.25)(x)
+
+    # Block 2
+    x = keras.layers.Conv2D(64, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.Conv2D(64, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.MaxPooling2D(2)(x)
+    x = keras.layers.Dropout(0.25)(x)
+
+    # Block 3
+    x = keras.layers.Conv2D(128, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.GlobalAveragePooling2D()(x)
+
+    # Dense head
+    x = keras.layers.Dense(256, activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.Dropout(0.4)(x)
+    x = keras.layers.Dense(128, activation="relu", kernel_initializer="he_normal")(x)
+    x = keras.layers.Dropout(0.3)(x)
+    outputs = keras.layers.Dense(10, activation="softmax")(x)
+
+    model = keras.Model(inputs, outputs)
+
+    # Use learning rate schedule for better convergence
+    lr_schedule = keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=0.001, decay_steps=1000, decay_rate=0.9
+    )
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    # Train for more epochs with augmentation
+    model.fit(
+        x_train, y_train,
+        epochs=10,
+        batch_size=128,
+        validation_data=(x_test, y_test),
+        verbose=0,
+    )
 
     _, acc = model.evaluate(x_test, y_test, verbose=0)
+
+    # Save to disk so next startup is instant
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    model.save(MODEL_PATH)
+    with open(ACC_PATH, "w") as f:
+        f.write(str(acc))
+
     return model, acc
 
 
-def preprocess_image(img: Image.Image) -> np.ndarray:
-    """Convert any image to 28x28 grayscale, white-on-black, centered."""
-    # Convert to grayscale
-    img = img.convert("L")
+def _center_by_mass_and_fit(gray_arr: np.ndarray) -> np.ndarray:
+    """
+    Core MNIST-style preprocessing:
+    1. Crop to bounding box of content
+    2. Scale to fit inside 20x20 preserving aspect ratio
+    3. Center by CENTER OF MASS in 28x28 (this is how MNIST was created)
+    4. Light Gaussian blur for anti-aliased edges
+    Returns a (1, 28, 28, 1) float32 tensor, or None.
+    """
+    arr = gray_arr.astype(np.float32)
 
-    # Determine if we need to invert (white bg → black bg)
-    arr = np.array(img)
-    if arr.mean() > 128:
-        img = ImageOps.invert(img)
+    # Find bounding box of non-zero content
+    thresh = arr.max() * 0.15  # adaptive threshold: 15% of peak brightness
+    mask = arr > thresh
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
 
-    # Apply slight Gaussian blur for smoother edges
-    img = img.filter(ImageFilter.GaussianBlur(radius=0.8))
-
-    # Find bounding box of content
-    arr = np.array(img)
-    rows = np.any(arr > 15, axis=1)
-    cols = np.any(arr > 15, axis=0)
-
-    if not rows.any():
-        return np.zeros((1, 28, 28, 1), dtype="float32")
+    if not rows.any() or not cols.any():
+        return None
 
     rmin, rmax = np.where(rows)[0][[0, -1]]
     cmin, cmax = np.where(cols)[0][[0, -1]]
 
-    # Crop to content
+    # Crop to bounding box
     cropped = arr[rmin:rmax + 1, cmin:cmax + 1]
-
-    # Fit into 20x20 maintaining aspect ratio (like MNIST preprocessing)
     ch, cw = cropped.shape
-    scale = min(20.0 / cw, 20.0 / ch)
-    new_w = max(1, int(cw * scale))
-    new_h = max(1, int(ch * scale))
+    if ch < 2 or cw < 2:
+        return None
 
-    cropped_img = Image.fromarray(cropped).resize((new_w, new_h), Image.LANCZOS)
+    # Scale to fit in 20x20 box, preserving aspect ratio
+    scale = min(20.0 / ch, 20.0 / cw)
+    new_h = max(1, int(round(ch * scale)))
+    new_w = max(1, int(round(cw * scale)))
 
-    # Center in 28x28
-    final = Image.new("L", (28, 28), 0)
-    paste_x = (28 - new_w) // 2
-    paste_y = (28 - new_h) // 2
-    final.paste(cropped_img, (paste_x, paste_y))
+    cropped_pil = Image.fromarray(cropped.astype(np.uint8))
+    resized = cropped_pil.resize((new_w, new_h), Image.LANCZOS)
+    resized_arr = np.array(resized).astype(np.float32)
 
-    result = np.array(final).astype("float32") / 255.0
-    return result.reshape(1, 28, 28, 1)
+    # Place in 28x28 canvas, centered by CENTER OF MASS
+    # (This is the key MNIST preprocessing step that most implementations miss)
+    canvas = np.zeros((28, 28), dtype=np.float32)
+
+    # Compute center of mass of the resized digit
+    total_mass = resized_arr.sum()
+    if total_mass == 0:
+        return None
+
+    ys, xs = np.mgrid[0:new_h, 0:new_w]
+    com_y = (ys * resized_arr).sum() / total_mass
+    com_x = (xs * resized_arr).sum() / total_mass
+
+    # Shift so center of mass is at (14, 14) — the center of 28x28
+    shift_x = int(round(14.0 - com_x))
+    shift_y = int(round(14.0 - com_y))
+
+    # Paste with the computed shift
+    y_start = max(0, shift_y)
+    x_start = max(0, shift_x)
+    y_end = min(28, shift_y + new_h)
+    x_end = min(28, shift_x + new_w)
+
+    src_y_start = max(0, -shift_y)
+    src_x_start = max(0, -shift_x)
+    src_y_end = src_y_start + (y_end - y_start)
+    src_x_end = src_x_start + (x_end - x_start)
+
+    if y_end > y_start and x_end > x_start:
+        canvas[y_start:y_end, x_start:x_end] = resized_arr[src_y_start:src_y_end, src_x_start:src_x_end]
+
+    # Light Gaussian blur for anti-aliased edges
+    canvas_pil = Image.fromarray(canvas.astype(np.uint8))
+    canvas_pil = canvas_pil.filter(ImageFilter.GaussianBlur(radius=0.65))
+    canvas = np.array(canvas_pil).astype(np.float32)
+
+    # Normalize to 0-1
+    if canvas.max() > 0:
+        canvas = canvas / 255.0
+
+    return canvas.reshape(1, 28, 28, 1)
+
+
+def preprocess_canvas_image(image_data: np.ndarray) -> np.ndarray:
+    """
+    Preprocess the canvas RGBA image for prediction.
+    Canvas has black background with white strokes.
+    """
+    # Extract grayscale from RGBA/RGB
+    if image_data.shape[2] >= 3:
+        gray = np.max(image_data[:, :, :3], axis=2).astype(np.uint8)
+    else:
+        gray = image_data[:, :, 0].astype(np.uint8)
+
+    # Check if anything was actually drawn
+    if gray.max() < 25:
+        return None
+
+    return _center_by_mass_and_fit(gray)
+
+
+def preprocess_uploaded_image(pil_img: Image.Image) -> np.ndarray:
+    """
+    Robustly preprocess an uploaded image (PNG/JPG/JPEG) to 28x28 white-on-black.
+    Handles: camera photos, scans, screenshots, gray/noisy backgrounds,
+    thin pencil strokes, uneven lighting, any orientation.
+    """
+    # --- Step 0: Resize large images and convert to grayscale ---
+    max_dim = 500
+    if max(pil_img.size) > max_dim:
+        ratio = max_dim / max(pil_img.size)
+        new_size = (int(pil_img.size[0] * ratio), int(pil_img.size[1] * ratio))
+        pil_img = pil_img.resize(new_size, Image.LANCZOS)
+
+    gray = pil_img.convert("L")
+
+    # Apply slight blur to reduce camera noise
+    gray = gray.filter(ImageFilter.GaussianBlur(radius=1.0))
+    arr = np.array(gray, dtype=np.float64)
+    h, w = arr.shape
+
+    # --- Step 1: Detect background and invert if needed ---
+    border_w = max(5, int(w * 0.08))
+    border_h = max(5, int(h * 0.08))
+    border_samples = np.concatenate([
+        arr[:border_h, :].flatten(),
+        arr[-border_h:, :].flatten(),
+        arr[:, :border_w].flatten(),
+        arr[:, -border_w:].flatten(),
+    ])
+    bg_brightness = np.median(border_samples)
+
+    if bg_brightness > 90:
+        arr = 255.0 - arr
+
+    # --- Step 2: Adaptive LOCAL thresholding ---
+    # Unlike global Otsu, this handles uneven lighting across the image
+    # (common in camera photos with shadows)
+    block_size = max(15, int(min(h, w) * 0.15)) | 1  # ensure odd
+    binary = np.zeros_like(arr)
+
+    # Pad the image for block processing
+    pad = block_size // 2
+    padded = np.pad(arr, pad, mode='reflect')
+
+    for y in range(h):
+        for x in range(w):
+            # Local neighborhood
+            local = padded[y:y + block_size, x:x + block_size]
+            local_mean = local.mean()
+            # Pixel is foreground if it's significantly brighter than local average
+            if arr[y, x] > local_mean + 8:
+                binary[y, x] = arr[y, x]
+
+    # Fallback: if adaptive threshold produced very little, use global Otsu
+    if binary.sum() < 100:
+        # Global Otsu as fallback
+        arr_flat = arr.flatten()
+        hist, _ = np.histogram(arr_flat, bins=256, range=(0, 256))
+        total = arr_flat.size
+        sum_total = np.sum(np.arange(256) * hist)
+        sum_bg, weight_bg, max_var, best_t = 0.0, 0, 0.0, 0
+        for t in range(256):
+            weight_bg += hist[t]
+            if weight_bg == 0: continue
+            weight_fg = total - weight_bg
+            if weight_fg == 0: break
+            sum_bg += t * hist[t]
+            mean_bg = sum_bg / weight_bg
+            mean_fg = (sum_total - sum_bg) / weight_fg
+            var = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
+            if var > max_var:
+                max_var = var
+                best_t = t
+        binary = arr.copy()
+        binary[binary < best_t] = 0
+
+    # --- Step 3: Morphological dilation to thicken thin strokes ---
+    # This helps with thin pencil/pen strokes that might be too thin
+    binary_uint8 = np.clip(binary, 0, 255).astype(np.uint8)
+    dilated_img = Image.fromarray(binary_uint8)
+    dilated_img = dilated_img.filter(ImageFilter.MaxFilter(size=3))
+    binary_uint8 = np.array(dilated_img)
+
+    # --- Step 4: Remove small noise blobs ---
+    # Only keep the largest connected region(s)
+    thresh_mask = binary_uint8 > 20
+    if thresh_mask.sum() > 0:
+        # Simple flood-fill connected component analysis
+        from scipy import ndimage
+        try:
+            labeled, num_features = ndimage.label(thresh_mask)
+            if num_features > 1:
+                # Keep only components with significant size (>1% of largest)
+                comp_sizes = ndimage.sum(thresh_mask, labeled, range(1, num_features + 1))
+                max_size = max(comp_sizes)
+                for i, size in enumerate(comp_sizes):
+                    if size < max_size * 0.01:
+                        binary_uint8[labeled == (i + 1)] = 0
+        except ImportError:
+            pass  # scipy not available, skip this step
+
+    # --- Step 5: Contrast stretch ---
+    max_val = binary_uint8.max()
+    if max_val > 0:
+        binary_uint8 = (binary_uint8.astype(np.float64) / max_val * 255.0).astype(np.uint8)
+
+    return _center_by_mass_and_fit(binary_uint8)
 
 
 def render_prob_bars(probs, predicted):
-    """Render beautiful probability bars as HTML."""
     html = '<div class="prob-container">'
     for i in range(10):
         pct = probs[i] * 100
@@ -422,9 +476,7 @@ def render_prob_bars(probs, predicted):
         html += f'''
         <div class="prob-row">
             <span class="prob-digit-label">{i}</span>
-            <div class="prob-track">
-                <div class="{cls}" style="width: {pct:.1f}%"></div>
-            </div>
+            <div class="prob-track"><div class="{cls}" style="width: {pct:.1f}%"></div></div>
             <span class="prob-pct">{pct:.1f}%</span>
         </div>'''
     html += '</div>'
@@ -432,7 +484,6 @@ def render_prob_bars(probs, predicted):
 
 
 def render_history(hist):
-    """Render history chips as HTML."""
     if not hist:
         return ""
     html = '<div style="display:flex;flex-wrap:wrap;gap:4px;">'
@@ -447,16 +498,20 @@ def render_history(hist):
 
 
 # ──────────────────────────────────────────────
-# Initialize session state
+# Session state
 # ──────────────────────────────────────────────
 if "history" not in st.session_state:
     st.session_state.history = []
+if "last_prediction" not in st.session_state:
+    st.session_state.last_prediction = None
+if "canvas_key" not in st.session_state:
+    st.session_state.canvas_key = 0
 
 
 # ──────────────────────────────────────────────
-# Train model (with loading spinner)
+# Train model
 # ──────────────────────────────────────────────
-with st.spinner("🧠 Training neural network on MNIST data... (first run only)"):
+with st.spinner("🧠 Training neural network on MNIST... (first run only, ~30s)"):
     model, test_accuracy = load_trained_model()
 
 
@@ -479,7 +534,7 @@ st.markdown("""
 
 
 # ──────────────────────────────────────────────
-# Main layout
+# Layout
 # ──────────────────────────────────────────────
 col_input, col_spacer, col_result = st.columns([5, 0.5, 5])
 
@@ -487,19 +542,21 @@ with col_input:
     tab_draw, tab_upload = st.tabs(["✏️  Draw", "📤  Upload"])
 
     with tab_draw:
-        st.markdown('<div class="section-label">Draw a digit below</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Draw a digit on the canvas</div>', unsafe_allow_html=True)
 
-        brush = st.slider("Brush size", 10, 35, 20, label_visibility="collapsed")
+        brush = st.slider("Brush size", 12, 40, 22, label_visibility="collapsed")
 
+        # Use pure black background for clean preprocessing
+        # Dynamic key forces a fresh canvas when Clear is clicked
         canvas_result = st_canvas(
             fill_color="rgba(255, 255, 255, 0)",
             stroke_width=brush,
             stroke_color="#FFFFFF",
-            background_color="#0a0a14",
+            background_color="#000000",
             width=280,
             height=280,
             drawing_mode="freedraw",
-            key="canvas",
+            key=f"canvas_{st.session_state.canvas_key}",
             display_toolbar=False,
         )
 
@@ -507,7 +564,10 @@ with col_input:
         with btn_col1:
             predict_draw = st.button("🔮 Recognize", type="primary", use_container_width=True, key="pred_draw")
         with btn_col2:
-            if st.button("🗑️ Clear", type="secondary", use_container_width=True, key="clear_draw"):
+            clear_draw = st.button("🗑️ Clear", type="secondary", use_container_width=True, key="clear_draw")
+            if clear_draw:
+                st.session_state.canvas_key += 1
+                st.session_state.last_prediction = None
                 st.rerun()
 
     with tab_upload:
@@ -528,42 +588,63 @@ with col_input:
 
 
 # ──────────────────────────────────────────────
-# Prediction logic
+# Prediction
 # ──────────────────────────────────────────────
 prediction_made = False
 probs = None
 predicted_digit = None
+preview_img = None
 
-# Predict from canvas
+# --- From canvas ---
 if predict_draw and canvas_result.image_data is not None:
-    img_array = canvas_result.image_data[:, :, :3]  # Remove alpha
-    if img_array.sum() > 0:
-        pil_img = Image.fromarray(img_array.astype("uint8"))
-        tensor = preprocess_image(pil_img)
+    tensor = preprocess_canvas_image(canvas_result.image_data)
+    if tensor is not None:
         probs = model.predict(tensor, verbose=0)[0]
         predicted_digit = int(np.argmax(probs))
         prediction_made = True
+        # Save the 28x28 preview
+        preview_img = (tensor.reshape(28, 28) * 255).astype(np.uint8)
+        st.session_state.last_prediction = {
+            "probs": probs, "digit": predicted_digit, "preview": preview_img
+        }
+    else:
+        st.toast("⚠️ Please draw a digit on the canvas first!", icon="✏️")
 
-# Predict from upload
+# --- From upload ---
 if predict_upload and uploaded_file is not None:
-    tensor = preprocess_image(upload_img)
-    probs = model.predict(tensor, verbose=0)[0]
-    predicted_digit = int(np.argmax(probs))
+    tensor = preprocess_uploaded_image(upload_img)
+    if tensor is not None:
+        probs = model.predict(tensor, verbose=0)[0]
+        predicted_digit = int(np.argmax(probs))
+        prediction_made = True
+        preview_img = (tensor.reshape(28, 28) * 255).astype(np.uint8)
+        st.session_state.last_prediction = {
+            "probs": probs, "digit": predicted_digit, "preview": preview_img
+        }
+    else:
+        st.toast("⚠️ Could not detect a digit in the image.", icon="📤")
+
+# Use stored prediction if available (persists across reruns)
+if not prediction_made and st.session_state.last_prediction is not None:
+    probs = st.session_state.last_prediction["probs"]
+    predicted_digit = st.session_state.last_prediction["digit"]
+    preview_img = st.session_state.last_prediction["preview"]
     prediction_made = True
 
+
 # ──────────────────────────────────────────────
-# Results display
+# Results
 # ──────────────────────────────────────────────
 with col_result:
     if prediction_made and probs is not None:
         conf = float(probs[predicted_digit]) * 100
 
-        # Add to history
-        st.session_state.history.insert(0, {"digit": predicted_digit, "conf": conf})
-        if len(st.session_state.history) > 12:
-            st.session_state.history.pop()
+        # Add to history (only on fresh prediction)
+        if predict_draw or predict_upload:
+            st.session_state.history.insert(0, {"digit": predicted_digit, "conf": conf})
+            if len(st.session_state.history) > 12:
+                st.session_state.history.pop()
 
-        # Prediction display
         st.markdown(f"""
         <div class="glass-card">
             <div class="prediction-box">
@@ -575,6 +656,11 @@ with col_result:
             {render_prob_bars(probs, predicted_digit)}
         </div>
         """, unsafe_allow_html=True)
+
+        # Show what the model sees (28x28 preview)
+        if preview_img is not None:
+            st.markdown('<div class="section-label" style="margin-top:16px">What the model sees (28×28)</div>', unsafe_allow_html=True)
+            st.image(Image.fromarray(preview_img), width=112, caption="Preprocessed input")
 
     else:
         st.markdown("""

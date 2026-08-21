@@ -3,3 +3,4 @@ streamlit-drawable-canvas==0.9.3
 tensorflow==2.16.2
 numpy
 Pillow
+scipy
