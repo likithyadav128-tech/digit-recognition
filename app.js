@@ -234,128 +234,157 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ========== PREDICT (DRAW) ==========
 async function predictDigit() {
     if (!model || !isModelReady) return;
-    const tensor = preprocessCanvas(drawCanvas);
-    await runPrediction(tensor);
+    try {
+        const btn = document.getElementById('predictBtn');
+        btn.disabled = true;
+        const tensor = preprocessCanvas(drawCanvas);
+        await runPrediction(tensor);
+    } catch (err) {
+        console.error('Prediction error:', err);
+        alert('Prediction error: ' + err.message);
+    } finally {
+        document.getElementById('predictBtn').disabled = false;
+    }
 }
 
 // ========== PREDICT (UPLOAD) ==========
 async function predictUploadedImage() {
     if (!model || !isModelReady) return;
 
-    const img = document.getElementById('uploadedImage');
+    const btn = document.getElementById('predictUploadBtn');
+    btn.disabled = true;
 
-    await new Promise(resolve => {
-        if (img.complete && img.naturalWidth > 0) return resolve();
-        img.onload = resolve;
-    });
+    try {
+        const img = document.getElementById('uploadedImage');
 
-    // Draw uploaded image onto a temporary canvas
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = img.naturalWidth;
-    tempCanvas.height = img.naturalHeight;
-    const ctx = tempCanvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
+        await new Promise(resolve => {
+            if (img.complete && img.naturalWidth > 0) return resolve();
+            img.onload = resolve;
+        });
 
-    // Get raw pixel data at original resolution
-    const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-    const w = tempCanvas.width;
-    const h = tempCanvas.height;
-
-    // --- Step 1: Convert to grayscale ---
-    const gray = new Float32Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-        gray[i] = 0.299 * imgData.data[i * 4] + 0.587 * imgData.data[i * 4 + 1] + 0.114 * imgData.data[i * 4 + 2];
-    }
-
-    // --- Step 2: Detect background using border pixels ---
-    const borderPixels = [];
-    const bw = Math.max(5, Math.floor(w * 0.08));
-    const bh = Math.max(5, Math.floor(h * 0.08));
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            if (y < bh || y >= h - bh || x < bw || x >= w - bw) {
-                borderPixels.push(gray[y * w + x]);
-            }
+        // Resize large images down to max 400px for speed and precision
+        const maxDim = 400;
+        let w = img.naturalWidth;
+        let h = img.naturalHeight;
+        if (Math.max(w, h) > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
         }
-    }
-    borderPixels.sort((a, b) => a - b);
-    const bgBrightness = borderPixels[Math.floor(borderPixels.length / 2)]; // median
 
-    // Invert if bright background (white paper)
-    if (bgBrightness > 90) {
-        for (let i = 0; i < gray.length; i++) {
-            gray[i] = 255 - gray[i];
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = w;
+        tempCanvas.height = h;
+        const ctx = tempCanvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const imgData = ctx.getImageData(0, 0, w, h);
+
+        // --- Step 1: Grayscale conversion ---
+        const gray = new Float32Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+            gray[i] = 0.299 * imgData.data[i * 4] + 0.587 * imgData.data[i * 4 + 1] + 0.114 * imgData.data[i * 4 + 2];
         }
-    }
 
-    // --- Step 3: Otsu thresholding ---
-    const hist = new Int32Array(256);
-    for (let i = 0; i < gray.length; i++) {
-        hist[Math.min(255, Math.max(0, Math.round(gray[i])))]++;
-    }
-
-    const total = gray.length;
-    let sumTotal = 0;
-    for (let t = 0; t < 256; t++) sumTotal += t * hist[t];
-
-    let sumBg = 0, weightBg = 0, maxVar = 0, bestThresh = 0;
-    for (let t = 0; t < 256; t++) {
-        weightBg += hist[t];
-        if (weightBg === 0) continue;
-        const weightFg = total - weightBg;
-        if (weightFg === 0) break;
-        sumBg += t * hist[t];
-        const meanBg = sumBg / weightBg;
-        const meanFg = (sumTotal - sumBg) / weightFg;
-        const variance = weightBg * weightFg * (meanBg - meanFg) * (meanBg - meanFg);
-        if (variance > maxVar) {
-            maxVar = variance;
-            bestThresh = t;
-        }
-    }
-
-    // Apply threshold — zero out background
-    for (let i = 0; i < gray.length; i++) {
-        if (gray[i] < bestThresh) gray[i] = 0;
-    }
-
-    // --- Step 4: Morphological dilation (3x3 max filter) to thicken thin strokes ---
-    const dilated = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            let maxVal = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                    const ny = y + dy, nx = x + dx;
-                    if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
-                        maxVal = Math.max(maxVal, gray[ny * w + nx]);
-                    }
+        // --- Step 2: Detect background using border pixels ---
+        const borderPixels = [];
+        const bw = Math.max(4, Math.floor(w * 0.06));
+        const bh = Math.max(4, Math.floor(h * 0.06));
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                if (y < bh || y >= h - bh || x < bw || x >= w - bw) {
+                    borderPixels.push(gray[y * w + x]);
                 }
             }
-            dilated[y * w + x] = maxVal;
         }
-    }
+        borderPixels.sort((a, b) => a - b);
+        const bgBrightness = borderPixels[Math.floor(borderPixels.length / 2)];
 
-    // --- Step 5: Contrast stretch ---
-    let maxPixel = 0;
-    for (let i = 0; i < dilated.length; i++) {
-        if (dilated[i] > maxPixel) maxPixel = dilated[i];
-    }
-    if (maxPixel > 0) {
+        // Invert if bright background (paper)
+        if (bgBrightness > 90) {
+            for (let i = 0; i < gray.length; i++) {
+                gray[i] = 255.0 - gray[i];
+            }
+        }
+
+        // --- Step 3: Otsu thresholding ---
+        const hist = new Int32Array(256);
+        for (let i = 0; i < gray.length; i++) {
+            const val = Math.min(255, Math.max(0, Math.round(gray[i])));
+            hist[val]++;
+        }
+
+        const total = gray.length;
+        let sumTotal = 0;
+        for (let t = 0; t < 256; t++) sumTotal += t * hist[t];
+
+        let sumBg = 0, weightBg = 0, maxVar = 0, bestThresh = 0;
+        for (let t = 0; t < 256; t++) {
+            weightBg += hist[t];
+            if (weightBg === 0) continue;
+            const weightFg = total - weightBg;
+            if (weightFg === 0) break;
+            sumBg += t * hist[t];
+            const meanBg = sumBg / weightBg;
+            const meanFg = (sumTotal - sumBg) / weightFg;
+            const variance = weightBg * weightFg * (meanBg - meanFg) * (meanBg - meanFg);
+            if (variance > maxVar) {
+                maxVar = variance;
+                bestThresh = t;
+            }
+        }
+
+        // Apply threshold
+        for (let i = 0; i < gray.length; i++) {
+            if (gray[i] < bestThresh) gray[i] = 0;
+        }
+
+        // --- Step 4: Morphological dilation (3x3 filter) ---
+        const dilated = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                let maxVal = 0;
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const ny = y + dy, nx = x + dx;
+                        if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
+                            if (gray[ny * w + nx] > maxVal) maxVal = gray[ny * w + nx];
+                        }
+                    }
+                }
+                dilated[y * w + x] = maxVal;
+            }
+        }
+
+        // --- Step 5: Contrast stretch ---
+        let maxPixel = 0;
         for (let i = 0; i < dilated.length; i++) {
-            dilated[i] = (dilated[i] / maxPixel) * 255;
+            if (dilated[i] > maxPixel) maxPixel = dilated[i];
         }
-    }
+        if (maxPixel > 0) {
+            for (let i = 0; i < dilated.length; i++) {
+                dilated[i] = (dilated[i] / maxPixel) * 255.0;
+            }
+        }
 
-    // --- Step 6: Center-of-mass centering into 28x28 (MNIST standard) ---
-    const tensor = centerByMassAndFit(dilated, w, h);
-    await runPrediction(tensor);
+        // --- Step 6: Center-of-mass centering into 28x28 ---
+        const tensor = centerByMassAndFit(dilated, w, h);
+        await runPrediction(tensor);
+    } catch (err) {
+        console.error('Upload prediction error:', err);
+        alert('Prediction error: ' + err.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 // ========== CENTER-OF-MASS PREPROCESSING (shared) ==========
 function centerByMassAndFit(grayArr, w, h) {
-    // Find bounding box with adaptive threshold
-    const peakVal = Math.max(...grayArr);
+    // Safe max finding (no call stack overflow)
+    let peakVal = 0;
+    for (let i = 0; i < grayArr.length; i++) {
+        if (grayArr[i] > peakVal) peakVal = grayArr[i];
+    }
     const thresh = peakVal * 0.15;
 
     let minX = w, minY = h, maxX = 0, maxY = 0;
@@ -380,15 +409,13 @@ function centerByMassAndFit(grayArr, w, h) {
 
     if (!hasContent || maxX <= minX || maxY <= minY) {
         previewCtx.drawImage(tmp, 0, 0);
-        const arr = new Float32Array(784);
-        return tf.tensor4d(arr, [1, 28, 28, 1]);
+        return tf.tensor4d(new Float32Array(784), [1, 28, 28, 1]);
     }
 
-    // Crop to bounding box
     const cw = maxX - minX + 1;
     const ch = maxY - minY + 1;
 
-    // Create a canvas with just the cropped content
+    // Crop
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = cw; cropCanvas.height = ch;
     const cropCtx = cropCanvas.getContext('2d');
@@ -405,12 +432,11 @@ function centerByMassAndFit(grayArr, w, h) {
     }
     cropCtx.putImageData(cropData, 0, 0);
 
-    // Scale to fit in 20x20 box
-    const scale = Math.min(20 / cw, 20 / ch);
+    // Fit to 20x20 maintaining aspect ratio
+    const scale = Math.min(20.0 / cw, 20.0 / ch);
     const newW = Math.max(1, Math.round(cw * scale));
     const newH = Math.max(1, Math.round(ch * scale));
 
-    // Resize
     const resizeCanvas = document.createElement('canvas');
     resizeCanvas.width = newW; resizeCanvas.height = newH;
     const resizeCtx = resizeCanvas.getContext('2d');
@@ -418,14 +444,13 @@ function centerByMassAndFit(grayArr, w, h) {
     resizeCtx.imageSmoothingQuality = 'high';
     resizeCtx.drawImage(cropCanvas, 0, 0, newW, newH);
 
-    // Read resized pixels
     const resizedData = resizeCtx.getImageData(0, 0, newW, newH);
     const resizedGray = new Float32Array(newW * newH);
     for (let i = 0; i < newW * newH; i++) {
         resizedGray[i] = resizedData.data[i * 4];
     }
 
-    // Compute center of mass
+    // Center of mass
     let totalMass = 0, comX = 0, comY = 0;
     for (let y = 0; y < newH; y++) {
         for (let x = 0; x < newW; x++) {
@@ -444,11 +469,9 @@ function centerByMassAndFit(grayArr, w, h) {
     comX /= totalMass;
     comY /= totalMass;
 
-    // Shift so center of mass is at (14, 14) — center of 28x28
-    const shiftX = Math.round(14 - comX);
-    const shiftY = Math.round(14 - comY);
+    const shiftX = Math.round(14.0 - comX);
+    const shiftY = Math.round(14.0 - comY);
 
-    // Place into 28x28 canvas
     const finalArr = new Float32Array(28 * 28);
     for (let y = 0; y < newH; y++) {
         for (let x = 0; x < newW; x++) {
@@ -460,7 +483,7 @@ function centerByMassAndFit(grayArr, w, h) {
         }
     }
 
-    // Draw preview
+    // Render 28x28 preview
     const previewData = tctx.createImageData(28, 28);
     for (let i = 0; i < 784; i++) {
         const v = Math.round(finalArr[i]);
@@ -473,10 +496,14 @@ function centerByMassAndFit(grayArr, w, h) {
     previewCtx.drawImage(tmp, 0, 0);
 
     // Normalize to 0-1
-    const tensor = new Float32Array(784);
-    const maxVal = Math.max(...finalArr);
+    let finalMax = 0;
     for (let i = 0; i < 784; i++) {
-        tensor[i] = maxVal > 0 ? finalArr[i] / maxVal : 0;
+        if (finalArr[i] > finalMax) finalMax = finalArr[i];
+    }
+
+    const tensor = new Float32Array(784);
+    for (let i = 0; i < 784; i++) {
+        tensor[i] = finalMax > 0 ? finalArr[i] / finalMax : 0;
     }
 
     return tf.tensor4d(tensor, [1, 28, 28, 1]);
