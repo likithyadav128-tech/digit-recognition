@@ -164,10 +164,16 @@ function loadUploadedFile(file) {
     const reader = new FileReader();
     reader.onload = (ev) => {
         const img = document.getElementById('uploadedImage');
+        img.onload = () => {
+            if (isModelReady) {
+                document.getElementById('predictUploadBtn').disabled = false;
+                // Auto recognize when uploaded
+                predictUploadedImage();
+            }
+        };
         img.src = ev.target.result;
         document.getElementById('uploadZone').classList.add('hidden');
         document.getElementById('uploadPreview').classList.remove('hidden');
-        if (isModelReady) document.getElementById('predictUploadBtn').disabled = false;
     };
     reader.readAsDataURL(file);
 }
@@ -199,7 +205,7 @@ async function loadModel() {
         bar.style.width = '45%';
 
         // Load pre-trained CNN model
-        model = await tf.loadLayersModel('./tfjs_model/model.json?v=4.0');
+        model = await tf.loadLayersModel('./tfjs_model/model.json?v=6.0');
         bar.style.width = '85%';
 
         // Warm up inference engine with dummy pass
@@ -233,39 +239,46 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ========== PREDICT (DRAW) ==========
 async function predictDigit() {
-    if (!model || !isModelReady) return;
+    if (!model || !isModelReady) {
+        alert('Engine is still loading, please wait a moment.');
+        return;
+    }
+    const btn = document.getElementById('predictBtn');
+    btn.disabled = true;
     try {
-        const btn = document.getElementById('predictBtn');
-        btn.disabled = true;
         const tensor = preprocessCanvas(drawCanvas);
         await runPrediction(tensor);
     } catch (err) {
         console.error('Prediction error:', err);
         alert('Prediction error: ' + err.message);
     } finally {
-        document.getElementById('predictBtn').disabled = false;
+        btn.disabled = false;
     }
 }
 
 // ========== PREDICT (UPLOAD) ==========
 async function predictUploadedImage() {
-    if (!model || !isModelReady) return;
+    if (!model || !isModelReady) {
+        alert('Engine is still loading, please wait a moment.');
+        return;
+    }
 
     const btn = document.getElementById('predictUploadBtn');
     btn.disabled = true;
 
     try {
         const img = document.getElementById('uploadedImage');
+        if (!img || !img.src) {
+            alert('Please select or upload an image first.');
+            return;
+        }
 
-        await new Promise(resolve => {
-            if (img.complete && img.naturalWidth > 0) return resolve();
-            img.onload = resolve;
-        });
+        // Determine image dimensions
+        let w = img.naturalWidth || img.width || 280;
+        let h = img.naturalHeight || img.height || 280;
 
         // Resize large images down to max 400px for speed and precision
         const maxDim = 400;
-        let w = img.naturalWidth;
-        let h = img.naturalHeight;
         if (Math.max(w, h) > maxDim) {
             const scale = maxDim / Math.max(w, h);
             w = Math.round(w * scale);
