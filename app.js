@@ -188,22 +188,78 @@ function switchTab(tab) {
     document.getElementById('panelUpload').classList.toggle('hidden', tab !== 'upload');
 }
 
-// ========== LOAD PRE-TRAINED MODEL ==========
+// ========== BUILD MODEL & LOAD PRE-TRAINED WEIGHTS ==========
+function buildModel() {
+    const m = tf.sequential();
+    // Block 1
+    m.add(tf.layers.conv2d({ inputShape: [28, 28, 1], filters: 32, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.batchNormalization());
+    m.add(tf.layers.conv2d({ filters: 32, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.maxPooling2d({ poolSize: 2 }));
+    m.add(tf.layers.dropout({ rate: 0.25 }));
+
+    // Block 2
+    m.add(tf.layers.conv2d({ filters: 64, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.batchNormalization());
+    m.add(tf.layers.conv2d({ filters: 64, kernelSize: 3, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.maxPooling2d({ poolSize: 2 }));
+    m.add(tf.layers.dropout({ rate: 0.25 }));
+
+    // Dense Head
+    m.add(tf.layers.flatten());
+    m.add(tf.layers.dense({ units: 256, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.dropout({ rate: 0.4 }));
+    m.add(tf.layers.dense({ units: 128, activation: 'relu', kernelInitializer: 'heNormal' }));
+    m.add(tf.layers.dropout({ rate: 0.3 }));
+    m.add(tf.layers.dense({ units: 10, activation: 'softmax' }));
+    return m;
+}
+
 async function loadModel() {
     const overlay = document.getElementById('loadingOverlay');
     const status = document.getElementById('loaderStatus');
     const bar = document.getElementById('loaderBarFill');
 
     try {
-        status.textContent = 'Loading pre-trained CNN weights...';
-        bar.style.width = '40%';
+        status.textContent = 'Building neural network...';
+        bar.style.width = '25%';
+        model = buildModel();
 
-        // Load pre-trained CNN model (99.21% test accuracy)
-        model = await tf.loadLayersModel('./tfjs_model/model.json');
-        bar.style.width = '80%';
+        status.textContent = 'Loading pre-trained CNN weights (99.2% accuracy)...';
+        bar.style.width = '60%';
 
-        // Warm up the model with a dummy inference
-        status.textContent = 'Initializing inference engine...';
+        // Fetch the raw weights binary (1.4 MB)
+        const res = await fetch('./tfjs_model/group1-shard1of1.bin?v=2.1');
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' loading weights file');
+        const buf = await res.arrayBuffer();
+
+        // Exact weight specs in order
+        const weightSpecs = [
+            [3, 3, 1, 32], [32],
+            [32], [32], [32], [32],
+            [3, 3, 32, 32], [32],
+            [3, 3, 32, 64], [64],
+            [64], [64], [64], [64],
+            [3, 3, 64, 64], [64],
+            [1024, 256], [256],
+            [256, 128], [128],
+            [128, 10], [10]
+        ];
+
+        let offset = 0;
+        const weightTensors = [];
+        for (const shape of weightSpecs) {
+            const size = shape.reduce((a, b) => a * b, 1);
+            const slice = new Float32Array(buf, offset * 4, size);
+            weightTensors.push(tf.tensor(slice, shape, 'float32'));
+            offset += size;
+        }
+
+        model.setWeights(weightTensors);
+        bar.style.width = '85%';
+
+        // Warm up model
+        status.textContent = 'Warming up inference engine...';
         const dummy = tf.zeros([1, 28, 28, 1]);
         const warmup = model.predict(dummy);
         await warmup.data();
@@ -214,8 +270,7 @@ async function loadModel() {
         status.textContent = 'Neural engine ready!';
         isModelReady = true;
 
-        // Smooth transition to main app
-        await sleep(300);
+        await sleep(250);
         overlay.classList.add('fade-out');
         document.getElementById('mainApp').classList.add('visible');
         document.getElementById('pillDot').classList.add('ready');
@@ -225,7 +280,7 @@ async function loadModel() {
             document.getElementById('predictUploadBtn').disabled = false;
         }
     } catch (err) {
-        console.error('Error loading pre-trained model:', err);
+        console.error('Error loading pre-trained weights:', err);
         status.textContent = 'Error: ' + err.message;
     }
 }
