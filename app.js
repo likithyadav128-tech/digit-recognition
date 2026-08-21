@@ -256,6 +256,56 @@ async function predictDigit() {
     }
 }
 
+// ========== FAST SEPARABLE BACKGROUND ESTIMATOR ==========
+function computeBackgroundEstimate(src, w, h) {
+    const radius = Math.max(10, Math.floor(Math.min(w, h) * 0.12));
+    const temp = new Float32Array(w * h);
+    const dest = new Float32Array(w * h);
+
+    // Horizontal pass (sliding window O(1) per pixel)
+    for (let y = 0; y < h; y++) {
+        let sum = 0, count = 0;
+        const rowOffset = y * w;
+        for (let x = -radius; x <= radius; x++) {
+            if (x >= 0 && x < w) {
+                sum += src[rowOffset + x];
+                count++;
+            }
+        }
+        temp[rowOffset] = sum / count;
+
+        for (let x = 1; x < w; x++) {
+            const addX = x + radius;
+            const remX = x - radius - 1;
+            if (addX < w) { sum += src[rowOffset + addX]; count++; }
+            if (remX >= 0) { sum -= src[rowOffset + remX]; count--; }
+            temp[rowOffset + x] = sum / count;
+        }
+    }
+
+    // Vertical pass (sliding window O(1) per pixel)
+    for (let x = 0; x < w; x++) {
+        let sum = 0, count = 0;
+        for (let y = -radius; y <= radius; y++) {
+            if (y >= 0 && y < h) {
+                sum += temp[y * w + x];
+                count++;
+            }
+        }
+        dest[x] = sum / count;
+
+        for (let y = 1; y < h; y++) {
+            const addY = y + radius;
+            const remY = y - radius - 1;
+            if (addY < h) { sum += temp[addY * w + x]; count++; }
+            if (remY >= 0) { sum -= temp[remY * w + x]; count--; }
+            dest[y * w + x] = sum / count;
+        }
+    }
+
+    return dest;
+}
+
 // ========== PREDICT (UPLOAD) ==========
 async function predictUploadedImage() {
     if (!model || !isModelReady) {
@@ -273,12 +323,10 @@ async function predictUploadedImage() {
             return;
         }
 
-        // Determine image dimensions
+        // Downscale large camera photos to max 350px for fast, sharp processing
+        const maxDim = 350;
         let w = img.naturalWidth || img.width || 280;
         let h = img.naturalHeight || img.height || 280;
-
-        // Resize large images down to max 400px for speed and precision
-        const maxDim = 400;
         if (Math.max(w, h) > maxDim) {
             const scale = maxDim / Math.max(w, h);
             w = Math.round(w * scale);
@@ -299,60 +347,41 @@ async function predictUploadedImage() {
             gray[i] = 0.299 * imgData.data[i * 4] + 0.587 * imgData.data[i * 4 + 1] + 0.114 * imgData.data[i * 4 + 2];
         }
 
-        // --- Step 2: Detect background using border pixels ---
-        const borderPixels = [];
-        const bw = Math.max(4, Math.floor(w * 0.06));
-        const bh = Math.max(4, Math.floor(h * 0.06));
-        for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-                if (y < bh || y >= h - bh || x < bw || x >= w - bw) {
-                    borderPixels.push(gray[y * w + x]);
-                }
-            }
-        }
-        borderPixels.sort((a, b) => a - b);
-        const bgBrightness = borderPixels[Math.floor(borderPixels.length / 2)];
+        // --- Step 2: Background Estimation & Shadow Cancellation ---
+        // This removes all camera shadows, uneven room lighting, and paper creases
+        const bg = computeBackgroundEstimate(gray, w, h);
 
-        // Invert if bright background (paper)
-        if (bgBrightness > 90) {
-            for (let i = 0; i < gray.length; i++) {
-                gray[i] = 255.0 - gray[i];
-            }
-        }
+        // Compute local brightness to handle both dark-on-light and light-on-dark
+        let avgBg = 0;
+        for (let i = 0; i < bg.length; i++) avgBg += bg[i];
+        avgBg /= bg.length;
 
-        // --- Step 3: Otsu thresholding ---
-        const hist = new Int32Array(256);
-        for (let i = 0; i < gray.length; i++) {
-            const val = Math.min(255, Math.max(0, Math.round(gray[i])));
-            hist[val]++;
-        }
+        const isLightPaper = avgBg > 100;
+        const ink = new Float32Array(w * h);
+        let maxInk = 0;
 
-        const total = gray.length;
-        let sumTotal = 0;
-        for (let t = 0; t < 256; t++) sumTotal += t * hist[t];
-
-        let sumBg = 0, weightBg = 0, maxVar = 0, bestThresh = 0;
-        for (let t = 0; t < 256; t++) {
-            weightBg += hist[t];
-            if (weightBg === 0) continue;
-            const weightFg = total - weightBg;
-            if (weightFg === 0) break;
-            sumBg += t * hist[t];
-            const meanBg = sumBg / weightBg;
-            const meanFg = (sumTotal - sumBg) / weightFg;
-            const variance = weightBg * weightFg * (meanBg - meanFg) * (meanBg - meanFg);
-            if (variance > maxVar) {
-                maxVar = variance;
-                bestThresh = t;
+        for (let i = 0; i < w * h; i++) {
+            // Subtract local background to extract ONLY the ink
+            const diff = isLightPaper ? (bg[i] - gray[i]) : (gray[i] - bg[i]);
+            if (diff > 0) {
+                ink[i] = diff;
+                if (diff > maxInk) maxInk = diff;
             }
         }
 
-        // Apply threshold
-        for (let i = 0; i < gray.length; i++) {
-            if (gray[i] < bestThresh) gray[i] = 0;
+        // --- Step 3: Adaptive Ink Thresholding ---
+        // Pen strokes have high difference relative to flat paper
+        const thresh = Math.max(15, maxInk * 0.25);
+        for (let i = 0; i < ink.length; i++) {
+            if (ink[i] < thresh) {
+                ink[i] = 0;
+            } else {
+                // Contrast stretch ink strokes
+                ink[i] = ((ink[i] - thresh) / (maxInk - thresh)) * 255.0;
+            }
         }
 
-        // --- Step 4: Morphological dilation (3x3 filter) ---
+        // --- Step 4: Morphological Dilation (thickens thin pencil/pen lines) ---
         const dilated = new Float32Array(w * h);
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
@@ -361,7 +390,7 @@ async function predictUploadedImage() {
                     for (let dx = -1; dx <= 1; dx++) {
                         const ny = y + dy, nx = x + dx;
                         if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
-                            if (gray[ny * w + nx] > maxVal) maxVal = gray[ny * w + nx];
+                            if (ink[ny * w + nx] > maxVal) maxVal = ink[ny * w + nx];
                         }
                     }
                 }
@@ -369,18 +398,7 @@ async function predictUploadedImage() {
             }
         }
 
-        // --- Step 5: Contrast stretch ---
-        let maxPixel = 0;
-        for (let i = 0; i < dilated.length; i++) {
-            if (dilated[i] > maxPixel) maxPixel = dilated[i];
-        }
-        if (maxPixel > 0) {
-            for (let i = 0; i < dilated.length; i++) {
-                dilated[i] = (dilated[i] / maxPixel) * 255.0;
-            }
-        }
-
-        // --- Step 6: Center-of-mass centering into 28x28 ---
+        // --- Step 5: Center-of-mass centering into 28x28 tensor ---
         const tensor = centerByMassAndFit(dilated, w, h);
         await runPrediction(tensor);
     } catch (err) {
